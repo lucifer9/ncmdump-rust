@@ -23,16 +23,16 @@ fn build_key_box(key: &[u8]) -> [u8; 256] {
     for i in 0..256 {
         tmpbox[i] = i as u8;
     }
-//    let mut swap: u8;
+    //    let mut swap: u8;
     let mut c: u64;
     let mut last_byte: u64 = 0;
 
     for i in 0..256 {
-//        swap = tmpbox[i];
+        //        swap = tmpbox[i];
         c = (tmpbox[i] as u64 + last_byte + key[(i % key_len) as usize] as u64) & 0xff;
-//        tmpbox[i] = tmpbox[c as usize];
-//        tmpbox[c as usize] = swap;
-        tmpbox.swap(i,c as usize);
+        //        tmpbox[i] = tmpbox[c as usize];
+        //        tmpbox[c as usize] = swap;
+        tmpbox.swap(i, c as usize);
         last_byte = c;
     }
     tmpbox
@@ -139,17 +139,14 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     drop(f);
 
     if format == "mp3" {
-        let mut tag = id3::Tag::new();
+        let mut tag = id3::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
+            .expect("error reading mp3 file:");
         let picture = id3::frame::Picture {
             mime_type: "image/jpeg".to_string(),
             picture_type: id3::frame::PictureType::CoverFront,
             description: String::new(),
             data: img_data,
         };
-        tag.add_frame(id3::frame::Frame::with_content(
-            "APIC",
-            id3::frame::Content::Picture(picture.clone()),
-        ));
         tag.set_title(music_name);
         tag.set_album(album);
         let mut artists = String::from(artist[0][0].as_str().unwrap());
@@ -158,6 +155,7 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
             artists += artist[i][0].as_str().unwrap();
         }
         tag.set_artist(artists);
+        tag.add_picture(picture);
         tag.write_to_path(
             std::path::Path::new(&filter_music_filename),
             id3::Version::Id3v24,
@@ -165,12 +163,8 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         .expect("error writing MP3 file:");
     } else if format == "flac" {
         // flac
-        let mut tag = metaflac::Tag::new();
-        tag.add_picture(
-            "image/jpeg",
-            metaflac::block::PictureType::CoverFront,
-            img_data,
-        );
+        let mut tag = metaflac::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
+            .expect("error reading flac file:");
         let mut c = metaflac::block::VorbisComment::new();
         c.set_title(vec![music_name]);
         c.set_album(vec![album]);
@@ -180,6 +174,11 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         }
         c.set_artist(artists);
         tag.push_block(metaflac::block::Block::VorbisComment(c));
+        tag.add_picture(
+            "image/jpeg",
+            metaflac::block::PictureType::CoverFront,
+            img_data,
+        );
         tag.write_to_path(std::path::Path::new(&filter_music_filename))
             .expect("error writing flac file:");
     }
