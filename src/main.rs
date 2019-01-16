@@ -140,7 +140,7 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
 
     if format == "mp3" {
         let mut tag = id3::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
-            .expect("error reading mp3 file:");
+            .unwrap_or(id3::Tag::new());
         let picture = id3::frame::Picture {
             mime_type: "image/jpeg".to_string(),
             picture_type: id3::frame::PictureType::CoverFront,
@@ -165,7 +165,7 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         // flac
         let mut tag = metaflac::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
             .expect("error reading flac file:");
-        let mut c = metaflac::block::VorbisComment::new();
+        let c = tag.vorbis_comments_mut();
         c.set_title(vec![music_name]);
         c.set_album(vec![album]);
         let mut artists: Vec<String> = Vec::new();
@@ -173,7 +173,6 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
             artists.push(artist[i][0].as_str().unwrap().to_string());
         }
         c.set_artist(artists);
-        tag.push_block(metaflac::block::Block::VorbisComment(c));
         tag.add_picture(
             "image/jpeg",
             metaflac::block::PictureType::CoverFront,
