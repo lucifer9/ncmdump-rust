@@ -1,13 +1,14 @@
 extern crate base64;
 extern crate byteorder;
+extern crate crypto;
 extern crate id3;
 extern crate json;
 extern crate metaflac;
-extern crate openssl;
 
 use byteorder::ByteOrder;
 use byteorder::NativeEndian;
-use openssl::symm::{decrypt, Cipher};
+use crypto::buffer::{BufferResult, ReadBuffer, WriteBuffer};
+use crypto::{aes, blockmodes, buffer, symmetriccipher};
 use std::io::prelude::*;
 use std::io::SeekFrom;
 use std::{env, mem};
@@ -38,6 +39,37 @@ fn build_key_box(key: &[u8]) -> [u8; 256] {
     tmpbox
 }
 
+fn decrypt(
+    encrypted_data: &[u8],
+    key: &[u8],
+) -> Result<Vec<u8>, symmetriccipher::SymmetricCipherError> {
+    let mut decryptor = aes::ecb_decryptor(aes::KeySize::KeySize128, key, blockmodes::PkcsPadding);
+
+    let mut final_result = Vec::<u8>::new();
+    let mut read_buffer = buffer::RefReadBuffer::new(encrypted_data);
+    let mut buffer = [0; 4096];
+    let mut write_buffer = buffer::RefWriteBuffer::new(&mut buffer);
+
+    loop {
+        let result = decryptor
+            .decrypt(&mut read_buffer, &mut write_buffer, true)
+            .expect("Crypto decrypt error:");
+        final_result.extend(
+            write_buffer
+                .take_read_buffer()
+                .take_remaining()
+                .iter()
+                .map(|&i| i),
+        );
+        match result {
+            BufferResult::BufferUnderflow => break,
+            BufferResult::BufferOverflow => {}
+        }
+    }
+
+    Ok(final_result)
+}
+
 fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     let mut ulen: u32;
     // let i: i32;
@@ -65,9 +97,9 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         (&mut key_data)[i as usize] ^= 0x64;
     }
 
-    let cipher = Cipher::aes_128_ecb();
-    let de_key_data =
-        decrypt(cipher, AES_CORE_KEY, None, &key_data).expect("error decrypting key data:");
+    //    let cipher = Cipher::aes_128_ecb();
+    let de_key_data = decrypt(&key_data, AES_CORE_KEY).expect("error decrypting key data:");
+    //        decrypt(cipher, AES_CORE_KEY, None, &key_data).expect("error decrypting key data:");
     //    let de_key_len = de_key_data.len() as u32;
     f.read(&mut buf)?;
     ulen = NativeEndian::read_u32(&buf);
@@ -84,7 +116,8 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     // dedata.resize(ulen as usize, 0);
 
     let data = base64::decode(&modify_data[22..]).expect("error decoding modify_data:");
-    let dedata = decrypt(cipher, AES_MODIFY_KEY, None, &data).expect("error decrypting data:");
+    //    let dedata = decrypt(cipher, AES_MODIFY_KEY, None, &data).expect("error decrypting data:");
+    let dedata = decrypt(&data, AES_MODIFY_KEY).expect("error decrypting data:");
 
     let music_info =
         json::parse(std::str::from_utf8(&dedata[6..]).expect("music info is not valid utf-8:"))
