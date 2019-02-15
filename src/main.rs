@@ -101,36 +101,46 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     let de_key_data = decrypt(&key_data, AES_CORE_KEY).expect("error decrypting key data:");
     //        decrypt(cipher, AES_CORE_KEY, None, &key_data).expect("error decrypting key data:");
     //    let de_key_len = de_key_data.len() as u32;
+    let kbox = build_key_box(&de_key_data[17..]);
     f.read(&mut buf)?;
     ulen = NativeEndian::read_u32(&buf);
-    let mut modify_data: Vec<u8> = Vec::with_capacity(ulen as usize);
-    modify_data.resize(ulen as usize, 0);
-    f.read_exact(&mut modify_data)?;
-    for i in 0..ulen {
-        modify_data.as_mut_slice()[i as usize] ^= 0x63;
+    let mut has_metadata = false;
+    let music_info:json::JsonValue;
+    if ulen > 0 {
+        has_metadata = true;
+        let mut modify_data: Vec<u8> = Vec::with_capacity(ulen as usize);
+        modify_data.resize(ulen as usize, 0);
+        f.read_exact(&mut modify_data)?;
+        for i in 0..ulen {
+            modify_data.as_mut_slice()[i as usize] ^= 0x63;
+        }
+        // let data_len: usize;
+        // let mut data: Vec<u8> = Vec::with_capacity(ulen as usize);
+        // data.resize(ulen as usize, 0);
+        // let mut dedata: Vec<u8> = Vec::with_capacity(ulen as usize);
+        // dedata.resize(ulen as usize, 0);
+
+        let data = base64::decode(&modify_data[22..]).expect("error decoding modify_data:");
+        //    let dedata = decrypt(cipher, AES_MODIFY_KEY, None, &data).expect("error decrypting data:");
+        let dedata = decrypt(&data, AES_MODIFY_KEY).expect("error decrypting data:");
+
+        music_info =
+            json::parse(std::str::from_utf8(&dedata[6..]).expect("music info is not valid utf-8:"))
+                .expect("error parsing json:");
+        let music_name = music_info["musicName"].as_str().unwrap();
+        let album = music_info["album"].as_str().unwrap();
+        let artist = &music_info["artist"];
+        let _bitrate = music_info["bitrate"].as_i64().unwrap();
+        let _duration = music_info["duration"].as_i64().unwrap();
+        let format = music_info["format"].as_str().unwrap();
+    } else {
+        println!(
+            "{} has no metadata.",
+            path.file_name().unwrap().to_str().unwrap()
+        );
     }
-    // let data_len: usize;
-    // let mut data: Vec<u8> = Vec::with_capacity(ulen as usize);
-    // data.resize(ulen as usize, 0);
-    // let mut dedata: Vec<u8> = Vec::with_capacity(ulen as usize);
-    // dedata.resize(ulen as usize, 0);
-
-    let data = base64::decode(&modify_data[22..]).expect("error decoding modify_data:");
-    //    let dedata = decrypt(cipher, AES_MODIFY_KEY, None, &data).expect("error decrypting data:");
-    let dedata = decrypt(&data, AES_MODIFY_KEY).expect("error decrypting data:");
-
-    let music_info =
-        json::parse(std::str::from_utf8(&dedata[6..]).expect("music info is not valid utf-8:"))
-            .expect("error parsing json:");
-    let music_name = music_info["musicName"].as_str().unwrap();
-    let album = music_info["album"].as_str().unwrap();
-    let artist = &music_info["artist"];
-    let _bitrate = music_info["bitrate"].as_i64().unwrap();
-    let _duration = music_info["duration"].as_i64().unwrap();
-    let format = music_info["format"].as_str().unwrap();
     let s = path.file_name().unwrap().to_str().unwrap();
-    let mut music_filename = s.get(0..s.len() - 4).unwrap().to_owned() + "." + format;
-
+    let mut music_filename = s.get(0..s.len() - 4).unwrap().to_owned() + ".";
     let mut filter = std::collections::HashMap::new();
     filter.insert("\\", "＼");
     filter.insert("/", "／");
@@ -146,15 +156,24 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     let filter_music_filename = music_filename;
     println!("{}", filter_music_filename);
 
-    f.read(&mut buf)?;
+    // f.read(&mut buf)?;
     // ulen = NativeEndian::read_u32(&buf);
-    f.seek(SeekFrom::Current(5))?;
+    f.seek(SeekFrom::Current(9))?;
     f.read(&mut buf)?;
     let img_len: u32 = NativeEndian::read_u32(&buf);
-    let mut img_data: Vec<u8> = Vec::with_capacity(img_len as usize);
-    img_data.resize(img_len as usize, 0);
-    f.read_exact(&mut img_data)?;
-    let kbox = build_key_box(&de_key_data[17..]);
+    let mut has_cover=false;
+    let mut img_data: Vec<u8>;
+    if img_len > 0 {
+        has_cover=true;
+        img_data = Vec::with_capacity(img_len as usize);
+        img_data.resize(img_len as usize, 0);
+        f.read_exact(&mut img_data)?;
+    } else {
+        println!(
+            "{} has no cover image.",
+            path.file_name().unwrap().to_str().unwrap()
+        );
+    }
     let mut n: usize = 0x8000;
     let mut buffer = [0u8; 0x8000];
     let mut fmusic = std::fs::File::create(std::path::Path::new(&filter_music_filename))?;
