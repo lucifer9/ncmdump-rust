@@ -2,8 +2,10 @@ extern crate base64;
 extern crate byteorder;
 extern crate crypto;
 extern crate id3;
+#[macro_use]
 extern crate json;
 extern crate metaflac;
+extern crate tempfile;
 
 use byteorder::ByteOrder;
 use byteorder::NativeEndian;
@@ -12,6 +14,7 @@ use crypto::{aes, blockmodes, buffer, symmetriccipher};
 use std::io::prelude::*;
 use std::io::SeekFrom;
 use std::{env, mem};
+use tempfile::NamedTempFile;
 
 const AES_CORE_KEY: &[u8; 16] = b"\x68\x7A\x48\x52\x41\x6D\x73\x6F\x35\x6B\x49\x6E\x62\x61\x78\x57";
 const AES_MODIFY_KEY: &[u8; 16] =
@@ -105,7 +108,7 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     f.read(&mut buf)?;
     ulen = NativeEndian::read_u32(&buf);
     let mut has_metadata = false;
-    let music_info:json::JsonValue;
+    let mut music_info = object! {};
     if ulen > 0 {
         has_metadata = true;
         let mut modify_data: Vec<u8> = Vec::with_capacity(ulen as usize);
@@ -127,12 +130,6 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         music_info =
             json::parse(std::str::from_utf8(&dedata[6..]).expect("music info is not valid utf-8:"))
                 .expect("error parsing json:");
-        let music_name = music_info["musicName"].as_str().unwrap();
-        let album = music_info["album"].as_str().unwrap();
-        let artist = &music_info["artist"];
-        let _bitrate = music_info["bitrate"].as_i64().unwrap();
-        let _duration = music_info["duration"].as_i64().unwrap();
-        let format = music_info["format"].as_str().unwrap();
     } else {
         println!(
             "{} has no metadata.",
@@ -140,7 +137,7 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
         );
     }
     let s = path.file_name().unwrap().to_str().unwrap();
-    let mut music_filename = s.get(0..s.len() - 4).unwrap().to_owned() + ".";
+    let mut music_filename = s.get(0..s.len() - 4).unwrap().to_owned();
     let mut filter = std::collections::HashMap::new();
     filter.insert("\\", "＼");
     filter.insert("/", "／");
@@ -153,18 +150,18 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     for (k, v) in filter.iter() {
         music_filename = music_filename.replace(k, v);
     }
-    let filter_music_filename = music_filename;
-    println!("{}", filter_music_filename);
+
+    println!("{}", music_filename);
 
     // f.read(&mut buf)?;
     // ulen = NativeEndian::read_u32(&buf);
     f.seek(SeekFrom::Current(9))?;
     f.read(&mut buf)?;
     let img_len: u32 = NativeEndian::read_u32(&buf);
-    let mut has_cover=false;
-    let mut img_data: Vec<u8>;
+    let mut _has_cover = false;
+    let mut img_data: Vec<u8> = vec![0];
     if img_len > 0 {
-        has_cover=true;
+        _has_cover = true;
         img_data = Vec::with_capacity(img_len as usize);
         img_data.resize(img_len as usize, 0);
         f.read_exact(&mut img_data)?;
@@ -176,7 +173,9 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
     }
     let mut n: usize = 0x8000;
     let mut buffer = [0u8; 0x8000];
-    let mut fmusic = std::fs::File::create(std::path::Path::new(&filter_music_filename))?;
+    let mut tmp = NamedTempFile::new()?;
+    let mut format = "undefined";
+    let mut filter_music_filename = music_filename;
     while n > 1 {
         n = f.read(&mut buffer)?;
         for i in 0..n {
@@ -185,55 +184,83 @@ fn process_file(path: &std::path::Path) -> std::io::Result<()> {
             buffer[i] ^=
                 kbox[(kbox[j] as usize + kbox[(kbox[j] as usize + j) & 0xff] as usize) & 0xff];
         }
-        fmusic.write(&buffer)?;
+        if format == "undefined" {
+            if buffer[0] == 0x49 && buffer[1] == 0x44 && buffer[2] == 0x33 {
+                format = "mp3";
+            } else {
+                format = "flac"
+            }
+            filter_music_filename = filter_music_filename + "." + format;
+        }
+        tmp.write(&buffer)?;
     }
-    drop(fmusic);
+    // let mut fmusic = std::fs::File::create(std::path::Path::new(&filter_music_filename))?;
+    std::fs::copy(
+        tmp.into_temp_path(),
+        std::path::Path::new(&filter_music_filename),
+    )?;
+    // drop(tmp);
     drop(f);
-
-    if format == "mp3" {
-        let mut tag = id3::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
-            .unwrap_or(id3::Tag::new());
-        let picture = id3::frame::Picture {
-            mime_type: "image/jpeg".to_string(),
-            picture_type: id3::frame::PictureType::CoverFront,
-            description: String::new(),
-            data: img_data,
-        };
-        tag.set_title(music_name);
-        tag.set_album(album);
-        let mut artists = String::from(artist[0][0].as_str().unwrap());
-        for i in 1..artist.len() {
-            artists += ";";
-            artists += artist[i][0].as_str().unwrap();
+    if has_metadata {
+        let mut mimetype = "";
+        if _has_cover {
+            let png: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+            if png == &img_data[..8] {
+                mimetype = "image/png";
+            } else {
+                mimetype = "image/jpeg";
+            }
         }
-        tag.set_artist(artists);
-        tag.add_picture(picture);
-        tag.write_to_path(
-            std::path::Path::new(&filter_music_filename),
-            id3::Version::Id3v24,
-        )
-        .expect("error writing MP3 file:");
-    } else if format == "flac" {
-        // flac
-        let mut tag = metaflac::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
-            .expect("error reading flac file:");
-        let c = tag.vorbis_comments_mut();
-        c.set_title(vec![music_name]);
-        c.set_album(vec![album]);
-        let mut artists: Vec<String> = Vec::new();
-        for i in 0..artist.len() {
-            artists.push(artist[i][0].as_str().unwrap().to_string());
+        let music_name = music_info["musicName"].as_str().unwrap();
+        let album = music_info["album"].as_str().unwrap();
+        let artist = &music_info["artist"];
+        let _bitrate = music_info["bitrate"].as_i64().unwrap();
+        let _duration = music_info["duration"].as_i64().unwrap();
+        if format == "mp3" {
+            let mut tag = id3::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
+                .unwrap_or(id3::Tag::new());
+            tag.set_title(music_name);
+            tag.set_album(album);
+            let mut artists = String::from(artist[0][0].as_str().unwrap());
+            for i in 1..artist.len() {
+                artists += "/";
+                artists += artist[i][0].as_str().unwrap();
+            }
+            tag.set_artist(artists);
+            if _has_cover {
+                let picture = id3::frame::Picture {
+                    mime_type: mimetype.to_owned(),
+                    picture_type: id3::frame::PictureType::CoverFront,
+                    description: String::new(),
+                    data: img_data,
+                };
+                tag.add_picture(picture);
+            }
+            tag.write_to_path(
+                std::path::Path::new(&filter_music_filename),
+                id3::Version::Id3v24,
+            )
+            .expect("error writing MP3 file:");
+        } else if format == "flac" {
+            // flac
+            let mut tag =
+                metaflac::Tag::read_from_path(std::path::Path::new(&filter_music_filename))
+                    .expect("error reading flac file:");
+            let c = tag.vorbis_comments_mut();
+            c.set_title(vec![music_name]);
+            c.set_album(vec![album]);
+            let mut artists: Vec<String> = Vec::new();
+            for i in 0..artist.len() {
+                artists.push(artist[i][0].as_str().unwrap().to_string());
+            }
+            c.set_artist(artists);
+            if _has_cover {
+                tag.add_picture(mimetype, metaflac::block::PictureType::CoverFront, img_data);
+            }
+            tag.write_to_path(std::path::Path::new(&filter_music_filename))
+                .expect("error writing flac file:");
         }
-        c.set_artist(artists);
-        tag.add_picture(
-            "image/jpeg",
-            metaflac::block::PictureType::CoverFront,
-            img_data,
-        );
-        tag.write_to_path(std::path::Path::new(&filter_music_filename))
-            .expect("error writing flac file:");
     }
-
     Ok(())
 }
 fn main() {
