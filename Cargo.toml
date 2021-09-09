@@ -1,14 +1,14 @@
 [package]
 name = "ncmdump"
-version = "0.2.0"
-authors = ["lucifer <lucifer@koredump.org>"]
+version = "0.2.1"
+authors = ["lucifer9 <lucifer9@gmail.com>"]
 edition = "2018"
 
 [dependencies]
 json = "*"
-base64 = "0.10.0"
-byteorder = "1.2.7"
-id3 = "0.2.2"
-metaflac = "0.1"
+base64 = "0.13.0"
+byteorder = "1"
+id3 = "0.6.4"
+metaflac = "0.2"
 rust-crypto = "^0.2"
-tempfile = "3.0.6"
+tempfile = "3"
